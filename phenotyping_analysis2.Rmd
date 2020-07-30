@@ -1,0 +1,1811 @@
+---
+title: "phenotyping analysis revised"
+author: "Melissa Drown"
+date: "10/7/2019"
+output: html_document
+---
+
+```{r include=F}
+library(cvequality)
+library(MASS)
+library(raster)
+library(ggplot2)
+library(car)
+library(dplyr)
+library(lsmeans)
+library(gridExtra)
+library(lubridate)
+library(lme4)
+library(broom)
+library(multcomp)
+library(tidyr)
+library(generics)
+library(gplots)
+```
+
+```{r}
+summarySE <- function(data=NULL, measurevar, groupvars=NULL, na.rm=FALSE,
+                      conf.interval=.95, .drop=TRUE) {
+    library(plyr)
+
+    # New version of length which can handle NA's: if na.rm==T, don't count them
+    length2 <- function (x, na.rm=FALSE) {
+        if (na.rm) sum(!is.na(x))
+        else       length(x)
+    }
+
+    # This does the summary. For each group's data frame, return a vector with
+    # N, mean, and sd
+    datac <- ddply(data, groupvars, .drop=.drop,
+      .fun = function(xx, col) {
+        c(N    = length2(xx[[col]], na.rm=na.rm),
+          mean = mean   (xx[[col]], na.rm=na.rm),
+          sd   = sd     (xx[[col]], na.rm=na.rm)
+        )
+      },
+      measurevar
+    )
+
+    # Rename the "mean" column    
+    datac <- rename(datac, c("mean" = measurevar))
+
+    datac$se <- datac$sd / sqrt(datac$N)  # Calculate standard error of the mean
+
+    # Confidence interval multiplier for standard error
+    # Calculate t-statistic for confidence interval: 
+    # e.g., if conf.interval is .95, use .975 (above/below), and use df=N-1
+    ciMult <- qt(conf.interval/2 + .5, datac$N-1)
+    datac$ci <- datac$se * ciMult
+
+    return(datac)
+}
+```
+
+```{r include=F}
+data_wam <- read.csv("2019WAM_backgroun_corrected_flat.csv")
+data_ctmax <- read.csv("OCNJ_s19_ctmax_2.csv")
+data_cam <- read.csv("mass_cor_OCNJ_s19_cam_2.csv")
+
+se <- function(x) {
+    sqrt(var(x)/length(x))
+}
+
+cv <- function(x) {
+    ((sd(x)/mean(x))*100)
+}
+
+data_wam <- data_wam %>%
+  mutate(habitat_temp=NA) %>%
+  mutate(habitat_temp=ifelse(pop=="NOC", 28,habitat_temp)) %>%
+  mutate(habitat_temp=ifelse(pop=="OCE", 32, habitat_temp)) %>%
+  mutate(habitat_temp=ifelse(pop=="SOC", 28, habitat_temp))
+
+data_ctmax <- data_ctmax %>%
+  mutate(habitat_temp=NA) %>%
+  mutate(habitat_temp=ifelse(pop=="NOC", 28,habitat_temp)) %>%
+  mutate(habitat_temp=ifelse(pop=="OCE", 32, habitat_temp)) %>%
+  mutate(habitat_temp=ifelse(pop=="SOC", 28, habitat_temp))
+
+data_cam <- data_cam %>%
+  mutate(habitat_temp=NA) %>%
+  mutate(habitat_temp=ifelse(pop=="NOC", 28,habitat_temp)) %>%
+  mutate(habitat_temp=ifelse(pop=="OCE", 32, habitat_temp)) %>%
+  mutate(habitat_temp=ifelse(pop=="SOC", 28, habitat_temp))
+
+```
+
+```{r, include=F}
+data_cam1 <- data_cam
+data_cam <- subset(data_cam, data_cam$MR_pmol_s!="NA")
+
+# Fix the Date to be recognized as a Date in all the files.
+data_wam$wam_date <- as.POSIXct(as.character(data_wam$wam_date), format="%m/%d/%y")
+data_ctmax$ctmax_date <- mdy(data_ctmax$ctmax_date)
+data_cam$cam_date <- mdy(data_cam$cam_date)
+data_cam1$cam_date <- mdy(data_cam1$cam_date)
+
+# make acclimation order a factor
+data_wam$accl_order <- as.factor(data_wam$accl_order)
+data_ctmax$accl_order <- as.factor(data_ctmax$accl_order)
+
+# make temp a factor
+data_wam$temp <- as.factor(data_wam$temp)
+data_ctmax$temp <- as.factor(data_ctmax$temp)
+data_cam$temp <- as.factor(data_cam$temp)
+data_cam1$temp <- as.factor(data_cam1$temp)
+```
+
+```{r}
+# without the one giant heart this is still sign.
+test <- subset(data_cam, data_cam$heart_mass < 0.05)
+# 12°C have significantly larger hearts than 28°C acclimated, but do not differ in body size
+t.test(data_cam$heart_mass~data_cam$temp)
+t.test(data_cam$cam_mass~data_cam$temp)
+
+scd <- summarySE(data_cam, measurevar="heart_mass", groupvars="temp", na.rm=TRUE)
+
+cam_heartmass <- ggplot(scd, aes(x=temp, y=heart_mass)) + 
+  geom_errorbar(aes(ymin=heart_mass-se, ymax=heart_mass+se), width=.1) +
+  geom_point(col=c("blue", "orange"), size=3) + 
+  annotate("text", x=2.3, y= 0.0175, label="p < 0.0001") +
+  ylab("Ventricular Mass (g)") +
+  xlab("Acclimation Temperature (°C)") +
+  theme_bw()
+
+plotmeans(heart_mass~ temp, data = data_cam, bars=TRUE, p=0.95, barcol=c("blue", "orange"), frame = FALSE,
+          mean.labels = FALSE, 
+          connect = FALSE,
+          n.label=FALSE)
+
+plotmeans(cam_mass~ temp, data = data_cam, bars=TRUE, p=0.95, barcol=c("blue", "orange"), frame = FALSE,
+          mean.labels = FALSE, 
+          connect = FALSE,
+          n.label=FALSE)
+
+#ggsave("cam_heartmass.eps", cam_heartmass, height=6, width=6)
+```
+
+Figures for proposal
+```{r}
+data_wam$temp <- factor(data_wam$temp, levels=c("12", "28"))
+wam.mass.model.proposal <- summary(lm(log10(data_wam$tenth_perc_MO2_mg_hr)~ log10(data_wam$mass_kg)))
+data_wam$residuals_log_mass_prop <- wam.mass.model.proposal$residuals
+
+wam.model1 <- lm(data_wam$residuals_log_mass_prop~data_wam$temp)
+ls.wam <- lsmeans(wam.model1, pairwise ~ temp)
+ls.wam <- as.data.frame(ls.wam$lsmeans)
+ls.wam
+
+wam_plastic <- ggplot(ls.wam, aes(x=as.factor(temp), y=lsmean)) +
+  geom_errorbar(aes(ymin=lsmean-SE, ymax=lsmean+SE), width=.1,
+                position=position_dodge(.9)) +
+  geom_point(aes(colour=temp), size=3.5) +
+  scale_colour_manual(name="Temp", values=c("blue", "orange")) + theme_bw() + ggtitle("Plasticity in Whole Animal Metabolic Rate") + ylab("Log Metabolic Rate Body Mass Residuals (mgO2/hr)") + xlab("Acclimaiton Temperature (°C)") + theme(legend.position="none")  + annotate("text", x=0.75, y=0.15, label="p < 2.2e-16***") 
+wam_plastic
+#ggsave("wam_plasticity.eps", wam_plastic, width=6, height=6)
+```
+Combined WAM and Ctmax figures
+```{r}
+# WAM
+# regress across both temps
+wam.mass.model.temp <- summary(lm(log10(data_wam$tenth_perc_MO2_mg_hr)~ log10(data_wam$mass_kg)))
+data_wam$residuals_log_mass2 <- wam.mass.model.temp$residuals
+
+data_wam$temp <- factor(data_wam$temp, levels=c("12", "28"))
+
+data.wam.temp <- summarySE(data_wam, measurevar="residuals_log_mass2", groupvars=c("temp","pop"))
+
+pd <- position_dodge(0.2) # move them .05 to the left and right
+
+data.wam.temp
+wam.temp <- ggplot(data.wam.temp, aes(x=temp, y=residuals_log_mass2, col=pop)) + 
+  geom_errorbar(aes(ymin=residuals_log_mass2-se, ymax=residuals_log_mass2+se), width=.1, position=pd) +
+    geom_line(position=pd) +
+    geom_point(position=pd) + 
+  scale_color_manual(values=c("blue", "red", "purple"))+
+  theme_bw()
+
+#ggsave("combined_wam.eps", wam.temp, width=6, height=6)
+
+# CTmax
+data_ctmax$temp <- factor(data_ctmax$temp, levels=c("12", "28"))
+
+data.ctmax.temp <- summarySE(data_ctmax, measurevar="ctmax", groupvars=c("temp","pop"))
+
+pd <- position_dodge(0.2) # move them .05 to the left and right
+
+data.ctmax.temp
+ctmax.temp <- ggplot(data.ctmax.temp, aes(x=temp, y=ctmax, col=pop)) + 
+  geom_errorbar(aes(ymin=ctmax-se, ymax=ctmax+se), width=.1, position=pd) +
+    geom_line(position=pd) +
+    geom_point(position=pd) + 
+  scale_color_manual(values=c("blue", "red", "purple"))+
+  theme_bw() + facet_grid(rows = vars(temp), scale="free")
+ctmax.temp
+#ggsave("combined_ctmax.eps", ctmax.temp, width=6, height=6)
+```
+
+```{r}
+data_ctmax$temp <- factor(data_ctmax$temp, levels=c("12", "28"))
+ctmax.model1 <- lm(data_ctmax$ctmax~data_ctmax$temp)
+ls.ctmax <- lsmeans(ctmax.model1, pairwise ~ temp)
+ls.ctmax <- as.data.frame(ls.ctmax$lsmeans)
+ls.ctmax
+
+ctmax_plastic <- ggplot(ls.ctmax, aes(x=as.factor(temp), y=lsmean)) +
+  geom_errorbar(aes(ymin=lsmean-SE, ymax=lsmean+SE), width=.1,
+                position=position_dodge(.9)) + ylim(36, 43)+
+  geom_point(aes(colour=temp), size=3.5) +
+  scale_colour_manual(name="Temp", values=c("blue", "orange")) + theme_bw() + ggtitle("Plasticity in Critical Thermal Maximum") + ylab("CTmax (°C)") + xlab("Acclimaiton Temperature (°C)") + theme(legend.position="none")  + annotate("text", x=0.75, y=42.25, label="p < 2.2e-16***") 
+
+#ggsave("ctmax_plasticity.eps", ctmax_plastic, width=6, height=6)
+```
+weight/length effect?
+```{r}
+size_data <- data_wam %>% group_by(FishID) %>%
+  mutate(GSI=(mass_kg/(length^3)))
+
+ggplot(size_data, aes(x=tenth_perc_MO2_mg_hr, y=GSI)) +
+  geom_point(aes(col=sex)) +
+  geom_smooth(method=lm, aes(col=sex))
+```
+
+#Whole Animal Metabolism Results
+Make some plots to answer general questions about the data including: 
+Is there evidence of technical error (due to date of measurement, grouping of individuals, etc.)? NO
+
+Based on any technical error are there significant outliers that should/can be removed? NO
+
+Is it normally distributed? YES
+```{r echo=F}
+# Is there evidence of technical error (due to date of measurement, grouping of individuals, etc.)?
+# Three fish are outliers at 28°C.
+ggplot(data_wam, aes(x=wam_date, y=tenth_perc_MO2_mg_hr, col=as.factor(accl_order), shape=pop)) + geom_point() + 
+  facet_wrap(~temp) + theme_bw() 
+
+# Those individuals are not outliers due to body mass.
+ggplot(data_wam, aes(x=wam_date, y=mass_kg)) + geom_point() + 
+  facet_wrap(~temp) + theme_bw() 
+
+# it is only three individuals so we will leave them in since there is no evidence of technical error here. 
+data_wam <- subset(data_wam, data_wam$tenth_perc_MO2_mg_hr > 0)
+
+# normality of raw data - Data are normal at both temperatures.
+s.tests <- data_wam %>% group_by(as.factor(temp)) %>% do(s.models = shapiro.test(.$tenth_perc_MO2_mg_hr)) 
+str(data_wam)
+s.tests %>% tidy(s.models)
+data_wam %>% group_by(temp) %>% do(qplots = qqnorm(.$tenth_perc_MO2_mg_hr))
+```
+Now that we know the data has few outliers that do not impact normallity we can start looking for some more interesting results. Let's go after the obvious patterns first. 
+
+For metabolic rate, we expect a correlation with body mass. The fit may be improved by log-transformation so we will consider both log and non-log models. Later on, we may want to visualize the residuals of the model metabolic rate~body mass rather than the raw values to remove variance due to body size from the data. Let's save those residuals now as well. 
+
+We additionally expect a difference between acclimation temperatures. Since data are normal we can test a difference in means between acclimation temperatures with a simple t-test.
+```{r echo=F}
+# First, the correlation with mass
+ggplot(data_wam, aes(x=mass_kg, y=tenth_perc_MO2_mg_hr, col=pop)) + 
+  geom_point() + geom_smooth(method="lm") + 
+  facet_wrap(~temp) + 
+  scale_color_manual(values=c("blue", "red", "purple")) + 
+  theme_bw()
+
+# correlation is significant: 12°C p=2.631500e-04, 28°C p=8.438888e-04
+wam_mass_correlation <- data_wam %>% group_by(temp, pop) %>% 
+  do(models=lm(.$tenth_perc_MO2_mg_hr~.$mass_kg))
+
+wam_mass_correlation %>% tidy(models)
+
+# and the correlation with mass after log-transformation: The fit is slightly more significant. So we will save the resdiuals from the log-log correlation.
+ggplot(data_wam, aes(x=log10(mass_kg), y=log10(tenth_perc_MO2_mg_hr))) + 
+  geom_point() + geom_smooth(method="lm") + 
+  facet_wrap(~temp) + 
+  scale_color_manual(values=c("blue", "red", "purple")) + 
+  theme_bw()
+
+# 12°C p = 2.381648e-04, 28°C p = 1.927596e-04
+wam_mass_correlation_log <- data_wam %>% group_by(temp) %>% 
+  do(models=lm(log10(.$tenth_perc_MO2_mg_hr)~log10(.$mass_kg)))
+
+wam_mass_correlation_log %>% tidy(models)
+
+# save the residuals from the log-log regression - note that residuals are not normally at 28°C. 
+wam.mass.model <- summary(lm(log10(data_wam$tenth_perc_MO2_mg_hr)~data_wam$temp + log10(data_wam$mass_kg)))
+data_wam$residuals_log_mass <- wam.mass.model$residuals
+
+s.tests1 <- data_wam %>% group_by(temp) %>% do(s.models = shapiro.test(.$residuals_log_mass)) 
+s.tests1 %>% tidy(s.models)
+
+ggplot(data_wam, aes(x=temp, y=residuals_log_mass, col=temp)) + 
+  geom_boxplot() + 
+  scale_color_manual(values=c("blue", "red"))+
+  theme_bw()
+
+#p-value < 2.2e-16
+# after background correction diff is 2.41 mgO2/hr
+t.test(data_wam$tenth_perc_MO2_mg_hr~data_wam$temp)
+```
+Since we are interested in differences among populations let's look at body mass distributions, sample sizes, and sex ratios. 
+```{r echo=F}
+# mean MO2 by pop within temperatures
+wam_mo2_avg <- data_wam %>% group_by(pop, temp) %>% do(mean_mo2 = mean(.$tenth_perc_MO2_mg_hr))
+wam_mo2_avg %>% tidy(mean_mo2)
+
+# mean mass by pop within temperatures
+wam_mass_avg <- data_wam %>% group_by(pop, temp) %>% do(mean_mass = mean(.$mass_kg))
+wam_mass_avg %>% tidy(mean_mass)
+
+# N.Ref is smaller in body mass (1.75g vs TE and 1.88g vs S.Ref)
+TukeyHSD(aov(data_wam$mass_kg~data_wam$pop))
+
+# by accl order
+wam_mass_avg_accl <- data_wam %>% group_by(accl_order, temp) %>% do(mean_mass = mean(.$mass_kg))
+wam_mass_avg_accl %>% tidy(mean_mass)
+
+# group 2 larger by 1.02g
+TukeyHSD(aov(data_wam$mass_kg~data_wam$accl_order))
+
+# sample size by temp
+wam_counts <- data_wam %>% group_by(temp) %>% do(n = nrow(.))
+wam_counts %>% tidy(n)
+
+# sample size by pop and temp
+wam_counts1 <- data_wam %>% group_by(temp, pop) %>% do(n = nrow(.))
+wam_counts1 %>% tidy(n)
+
+# number of males and females per pop and temp
+wam_counts2 <- data_wam %>% group_by(temp, pop, sex) %>% do(n = nrow(.))
+wam_counts2 %>% tidy(n)
+```
+The north site has more small individuals than the other two sites and group 2 is slightly larger than group 1 individuals in mean mass. Samples sizes are fairly even across temperatures and populations. The TE site at 12°C had only 10/30 females while other groups were more evenly split.
+
+Now that we have some information about the data we can use Akaike Information Criterion (AIC) to assess what variables are important for metabolic rate in individuals measured at 12°C and 28°C. This approach will allow us to determine the model that explains the greatest amount of variation in the data using the fewest number of terms. The model with the lowest AIC (calculated based on the number of terms and the amount of variance explained) is the best fit model.
+
+General model fit
+Use AIC to get best fit model across all data
+```{r}
+fits_wam = data_wam %>% do(model = stepAIC(aov(log10(tenth_perc_MO2_mg_hr)~ temp + log10(mass_kg) + sex + accl_order + pop, data=.), scope = . ~ .^2, direction='both'))
+fits_wam$model
+fits_wam %>% tidy(model)
+```
+```{r}
+wam_model <- aov(data=data_wam, log10(tenth_perc_MO2_mg_hr)~temp + log10(mass_kg) + accl_order + pop + temp:accl_order + temp:log10(mass_kg))
+
+TukeyHSD(wam_model, which="temp")
+TukeyHSD(wam_model, which="accl_order")
+TukeyHSD(wam_model, which="pop")
+TukeyHSD(wam_model, which="temp:accl_order")
+```
+The data will be grouped by temperature and the stepAIC function will look for the model of best fit based on AIC by testing the inclusion or exclusion of all terms given and any second order interactions among those terms. This will give us one model for metabolic rate at 12°C and one model for metabolic rate at 28°C.
+```{r echo=F}
+fits_wam1 = data_wam  %>% do(model = stepAIC(aov(log10(tenth_perc_MO2_mg_hr)~log10(mass_kg) + temp + sex + pop, data=.), scope = . ~ .^2, direction='both'))
+fits_wam1$model
+fits_wam1 %>% tidy(model)
+
+fits_wam = data_wam %>% group_by(temp) %>% do(model = stepAIC(aov(log10(tenth_perc_MO2_mg_hr)~log10(mass_kg) + sex + accl_order + pop, data=.), scope = . ~ .^2, direction='both'))
+fits_wam$model
+fits_wam %>% tidy(model)
+```
+
+##WAM at 12°C
+Best Fit Model: log10(tenth_perc_MO2_mg_hr) ~ log10(mass_kg) + accl_order + log10(mass_kg):pop + log10(mass_kg):accl_order + sex + sex:pop + pop
+
+We know that population and the interaction between mass and acclimation order are important terms although they are not significant. Additionally, we know that mass and acclimation order have a significant impact on metabolic rate and that there is a significant interaction between mass and population.
+```{r}
+# reorder the population variable for plotting later
+data_wam$pop <- factor(data_wam$pop, levels=c("NOC","OCE","SOC"))
+data_wam$temp <- factor(data_wam$temp, levels=c("28", "12"))
+data_wam$sex <- factor(data_wam$sex, levels=c("F", "M"))
+
+# subset the data
+wam_cold <- subset(data_wam, data_wam$temp=="12")
+
+# extract the AIC value
+extractAIC(aov(formula = log10(tenth_perc_MO2_mg_hr) ~ log10(mass_kg) + accl_order + log10(mass_kg)*pop + log10(mass_kg)*accl_order + sex + sex*pop + pop, 
+    data = wam_cold))
+
+# save the model
+wam.model.cold <- aov(log10(tenth_perc_MO2_mg_hr) ~ log10(mass_kg) + accl_order + log10(mass_kg)*pop + log10(mass_kg)*accl_order + sex + sex*pop + pop, data = wam_cold)
+summary(wam.model.cold)
+
+# post-hoc comparison of populations
+TukeyHSD(wam.model.cold, which="pop")
+
+# comparison of metabolic rate between acclimation conditions
+# Group 2 - went from 28°C to 12°C had a lower 12°C MR than group 1.
+wam_avg_accl <- data_wam %>% group_by(accl_order, temp) %>% do(mean_wam = mean(.$tenth_perc_MO2_mg_hr)) %>% tidy(mean_wam)
+wam_avg_accl 
+
+# what is the interaction between mass and population?
+wam_pop_mass_inter <- data_wam %>% group_by(temp, pop) %>% do(models_new=summary(lm(log10(.$tenth_perc_MO2_mg_hr)~log10(.$mass_kg))))
+wam_pop_mass_inter %>% tidy(models_new)
+
+# Determine interaction significance in a pairwise fashion
+# NOC vs. TE p=0.044*, SOC vs. TE p=0.096, NOC vs. SOC p=0.95
+m.lst <- lstrends(wam.model.cold, which="pop", var="log10(mass_kg)")
+m.lst
+pairs(m.lst)
+
+# Data for Figures: body mass residuals
+# the lsmeans uses combined estimated effects of the model in determining the group mean
+wam.model.cold.res <- aov(wam_cold$residuals_log_mass~wam_cold$pop)
+ls.cold <- lsmeans(wam.model.cold.res, pairwise ~ pop)
+ls.cold <- as.data.frame(ls.cold$lsmeans)
+ls.cold
+```
+At 12°C it seems that the TE population does not have a significant correlation between metabolic rate and body mass, although the other populations do. This is why the interaction is coming up as significant. 
+
+```{r, echo=F}
+# plot of body mass residuals
+p1.res <- ggplot(ls.cold, aes(x=as.factor(pop), y=lsmean)) +
+  geom_errorbar(aes(ymin=lsmean-SE, ymax=lsmean+SE), width=.2,
+                position=position_dodge(.9)) + ylim(-0.08, 0.08)+
+  geom_point(aes(colour=pop), size=5) +
+  scale_colour_manual(name="Population", values=c("blue", "red", "purple")) + theme_bw() + ggtitle("12°C") + ylab("Log Metabolic Rate Residuals (mg/hr)") + xlab("Population") + theme(legend.position="none")  + annotate("text", x=0.75, y=0.04, label="p = 0.41") 
+p1.res <- p1.res + theme(plot.title=element_text(size=20, 
+                                         face="bold", 
+                                         hjust=0.5,
+                                         lineheight=1.2),  # title
+                 plot.caption=element_text(size=15),  # caption
+                 axis.title.x=element_text(size=15),  # X axis title
+                 axis.title.y=element_text(size=15),  # Y axis title
+                 axis.text.x=element_text(size=10,
+                                          vjust=.5),  # X axis text
+                 axis.text.y=element_text(size=10))  # Y axis text
+p1.res
+```
+##WAM at 28C
+Best Fit Model: 28°C = tenth_perc_MO2_mg_hr ~ log10(mass_kg) +  pop 
+```{r echo=F}
+# subset the data
+wam_hot <- subset(data_wam, data_wam$temp=="28")
+
+# extract the AIC of the model
+extractAIC(aov(formula = log10(tenth_perc_MO2_mg_hr) ~ log10(mass_kg) + pop, data = wam_hot))
+
+# save the model
+wam.model.hot <- aov(log10(tenth_perc_MO2_mg_hr) ~ log10(mass_kg) + pop, data = wam_hot)
+summary(wam.model.hot)
+TukeyHSD(wam.model.hot, which = 'pop')
+
+# Additionally, since we know populations vary in mean mass let's save summary statistics for the body mass residuals.
+wam.model.hot.res <- aov(wam_hot$residuals_log_mass~wam_hot$pop)
+ls.hot <- lsmeans(wam.model.hot.res, pairwise ~ pop)
+ls.hot <- as.data.frame(ls.hot$lsmeans)
+ls.hot
+```
+
+```{r}
+# plot the residuals
+p2.res <- ggplot(ls.hot, aes(x=as.factor(pop), y=lsmean)) +
+  geom_errorbar(aes(ymin=lsmean-SE, ymax=lsmean+SE), width=.2,
+                position=position_dodge(.9)) + 
+  geom_point(aes(colour=pop), size=5) + ylim(-0.08,0.08) + 
+  scale_colour_manual(name="Population", values=c("blue", "red", "purple")) + theme_bw() + ggtitle("28°C") + ylab("Whole Animal Metabolic Rate") + xlab("Population") + theme(legend.position="none")  +  annotate("text", x=0.75, y=0.04, label="p = 0.10")
+p2.res <- p2.res + theme(plot.title=element_text(size=20, 
+                                         face="bold", 
+                                         hjust=0.5,
+                                         lineheight=1.2),  # title
+                 plot.caption=element_text(size=15),  # caption
+                 axis.title.x=element_text(size=15),  # X axis title
+                 axis.title.y=element_text(size=15),  # Y axis title
+                 axis.text.x=element_text(size=10,
+                                          vjust=.5),  # X axis text
+                 axis.text.y=element_text(size=10))  # Y axis text
+p2.res
+```
+
+
+##Plot the data for WAM
+```{r echo=F}
+wam_fig <- grid.arrange(p1.res, p2.res, nrow=1)
+#ggsave("wam_fig.eps", wam_fig, width=12, height=6)
+```
+To investigate phenotypic plasticity among individuals and populations we can compare performance under 28°C and 12°C.
+
+Let's answer some basic questions about individuals who were measured at both acclimation temperatures:
+
+Are 12°C and 28°C metabolic rate correlated?
+
+What terms contibute to the difference between 28°C and 12°C metabolic rate (i.e. a measure of plasticity)?
+
+```{r echo=F}
+wam_all_wide <- merge(wam_cold, wam_hot, by="FishID")
+
+# variable.x = 12°C, variable.y = 28°C
+wam_diff <- wam_all_wide %>% group_by("FishID") %>%
+  mutate(diff_wam_btw_accl=as.integer(tenth_perc_MO2_mg_hr.y-tenth_perc_MO2_mg_hr.x))
+
+# are 12°C and 28°C metabolic rate correlated? No significant correlation p = 0.45, R2 = 0.010
+summary(lm(wam_diff$tenth_perc_MO2_mg_hr.y~wam_diff$tenth_perc_MO2_mg_hr.x))
+
+# best fit: diff_wam_btw_accl ~ log10(mass_kg.x) + sex.x + accl_order.x + pop.x
+wam_diff.aov <- aov(wam_diff$diff_wam_btw_accl~wam_diff$pop.x)
+summary(wam_diff.aov)
+```
+Finally, we want to look at interindividual variance in metabolic rate using the coefficient of variation (cv = standard deviation/within group mean). The CV can later be used to compare variance across phenotypes because it is scaled by the within group mean. An asymptotic test can be used to test for the equality of coefficients of variation from 2 or more groups and is robust when groups have unequal sizes.
+
+##Variance in WAM. CV is a percentage (%). 
+All WAM 49.87% - asymptotic test equality of cov between temps p = 0.092
+
+28°C WAM 30.58% - asymptotic test equality of cov among pops p = 0.20
+
+12°C WAM 36.91% - asymptotic test equality of cov among pops p = 0.82
+
+28	OCE	30.00	
+28	NOC	35.3	
+28	SOC	25.28
+12	OCE	33.59	
+12	NOC	38.41		
+12	SOC	36.4
+```{r include=F}
+# overall
+cv(data_wam$tenth_perc_MO2_mg_hr)
+
+# by temp
+wam_cvs <- data_wam %>% group_by(temp) %>% do(cvs = cv(.$tenth_perc_MO2_mg_hr))
+wam_cvs %>% tidy(cvs)
+# p = 0.092
+asymptotic_test(data_wam$tenth_perc_MO2_mg_hr, data_wam$temp)
+
+# by population and temp
+wam_cvs <- data_wam %>% group_by(temp, pop) %>% do(cvs = cv(.$tenth_perc_MO2_mg_hr))
+wam_cvs %>% tidy(cvs)
+# p = 0.82
+asymptotic_test(wam_cold$tenth_perc_MO2_mg_hr, wam_cold$pop)
+# p = 0.20
+asymptotic_test(wam_hot$tenth_perc_MO2_mg_hr, wam_hot$pop)
+```
+Plots showing variance in metabolic rate among individuals. Each individual measure is first scaled by the within group mean (distribution will be centered on 1) to allow for comparison of variance in data measured on different scales. 
+```{r echo=F}
+wam_variance <- wam_all_wide %>% group_by(FishID) %>%
+  mutate(MR_scaled_28=(tenth_perc_MO2_mg_hr.y/mean(wam_hot$tenth_perc_MO2_mg_hr))) %>%
+  mutate(MR_scaled_12=(tenth_perc_MO2_mg_hr.x/mean(wam_cold$tenth_perc_MO2_mg_hr)))
+
+variance_elipse_plot <- ggplot(wam_variance, aes(y=MR_scaled_28, x=MR_scaled_12)) + 
+  geom_point(color="darkgrey") + 
+  stat_ellipse(aes(x=MR_scaled_12, y=MR_scaled_28),type = "norm") + 
+  labs(x="Variance 12°C", y="Variance 28°C", title="Phenotypic Variance") + 
+  theme_bw()
+variance_elipse_plot
+
+variance_density_plot <- ggplot(wam_variance) + 
+  geom_density(aes(x = MR_scaled_28, colour = "28°C Metabolic Rate")) +
+  geom_density(aes(x = MR_scaled_12, colour = "12°C Metabolic Rate")) +
+  scale_color_manual(values=c("blue", "salmon")) +
+  labs(x="Metabolic Rate (scaled)", y="Density", title="Phenotypic Variance") +
+  theme_bw()
+variance_density_plot
+```
+General Metabolic Rate Results:
+- No differences among populations
+- significant difference between 12°C and 28°C
+- higher variance at 12°C than 28°C
+- interaction between mass and population at 12°C. TE not correlated wtih mass. TE vs. NOC significant interaction. 
+- Group 2: went from 28°C to 12°C had a lower metabolic rate than group 1 under 12°C conditions.
+
+#Critical Thermal Maximum Results
+Make some plots to answer general questions about the data including: 
+Is there evidence of technical error (due to date of measurement, grouping of individuals, etc.)? YES
+
+One date of measurement includes outliers at 28°C. 
+
+Based on any technical error are there significant outliers that should/can be removed?  YES
+
+After looking at notes from data collection it is confirmed that individuals measured on 4-15-2019 were influenced by a technical error that occured in temperature probe calibration. The data from that day was thus removed from further analysis.
+
+Is it normally distributed? YES
+```{r echo=F}
+# mass - the correlation looks weak. and at 28°C there is a group of very high individuals.
+ggplot(data_ctmax, aes(x=weight_wam, y=ctmax)) + geom_point() + geom_smooth(method="lm") +
+  facet_wrap(~temp) + labs(main="indluding all individuals") + theme_bw() 
+
+# date & acclimation order - at 28°C there is a group of individuals who were all measured on the same day that have a higher CTmax than any other day
+ggplot(data_ctmax, aes(x=ctmax_date, y=ctmax, col=accl_order)) + geom_point() + 
+  facet_wrap(~temp) + labs(main="indluding all individuals") + theme_bw() 
+
+# remove individuals influenced by known technical error. 
+data_ctmax <- subset(data_ctmax, data_ctmax$ctmax_date!="2019-04-15")
+
+# mass 
+ggplot(data_ctmax, aes(x=weight_wam, y=ctmax)) + geom_point() + geom_smooth(method="lm") +
+  facet_wrap(~temp) + labs(main="after removing 4/15 data") + theme_bw() 
+
+# date & acclimation order
+ggplot(data_ctmax, aes(x=ctmax_date, y=ctmax, col=accl_order)) + geom_point() +
+  facet_wrap(~temp) + labs(main="after removing 4/15 data") + theme_bw()
+
+# average CTmax at 12°C and 28°C
+ctmax_by_temp <- data_ctmax %>% group_by(temp) %>% do(ctmax_means = mean(.$ctmax))
+ctmax_by_temp %>% tidy(ctmax_means)
+
+t.test(data_ctmax$ctmax ~data_ctmax$temp)
+
+ctmax_by_mass <- data_ctmax %>% do(ctmax_mass = lm(.$ctmax~.$weight_wam))
+ctmax_by_mass %>% tidy(ctmax_mass)
+
+# normality 12°C p = 0.77, 28°C p = 0.14
+s.tests <- data_ctmax %>% group_by(temp) %>% do(s.models = shapiro.test(.$ctmax)) 
+s.tests %>% tidy(s.models)
+data_ctmax %>% group_by(temp) %>% do(qplots = qqnorm(.$ctmax))
+
+ctmax_hot <- subset(data_ctmax, data_ctmax$temp=="28")
+ctmax_cold <- subset(data_ctmax, data_ctmax$temp=="12")
+mean(ctmax_hot$ctmax)
+mean(ctmax_cold$ctmax)
+```
+Since we are interested in differences among populations let's look at body mass distributions, sample sizes, and sex ratios. 
+```{r echo=F}
+# mean mass by pop within temperatures
+ctmax_mass_avg <- data_ctmax %>% group_by(pop, temp) %>% do(mean_mass = mean(.$weight_wam))
+ctmax_mass_avg %>% tidy(mean_mass)
+
+# N.Ref is smaller in body mass (1.99g vs TE and 1.96g vs S.Ref)
+TukeyHSD(aov(data_ctmax$weight_wam~data_ctmax$pop))
+
+# by accl order
+ctmax_mass_avg_accl <- data_ctmax %>% group_by(accl_order, temp) %>% do(mean_mass = mean(.$weight_wam))
+ctmax_mass_avg_accl %>% tidy(mean_mass)
+
+# group 2 larger by 1.05g
+TukeyHSD(aov(data_ctmax$weight_wam~data_ctmax$accl_order))
+
+# sample size by temp
+ctmax_counts <- data_ctmax %>% group_by(temp) %>% do(n = nrow(.))
+ctmax_counts %>% tidy(n)
+
+# sample size by pop and temp
+ctmax_counts1 <- data_ctmax %>% group_by(temp, pop) %>% do(n = nrow(.))
+ctmax_counts1 %>% tidy(n)
+
+# number of males and females per pop and temp
+ctmax_counts2 <- data_ctmax %>% group_by(temp, pop, sex) %>% do(n = nrow(.))
+ctmax_counts2 %>% tidy(n)
+```
+General model fit
+Use AIC to get best fit model across all data
+```{r}
+fits_ctmax = data_ctmax %>% do(model = stepAIC(aov(ctmax~ temp + weight_wam + sex + accl_order + pop, data=.), scope = . ~ .^2, direction='both'))
+fits_ctmax$model
+fits_ctmax %>% tidy(model)
+```
+```{r}
+model_ctmax <- aov(data=data_ctmax, ctmax~ temp + sex + accl_order + temp:accl_order + pop)
+
+TukeyHSD(model_ctmax, which="temp")
+TukeyHSD(model_ctmax, which="sex")
+TukeyHSD(model_ctmax, which="accl_order")
+TukeyHSD(model_ctmax, which="temp:accl_order")
+TukeyHSD(model_ctmax, which="pop")
+```
+AIC models: CTmax data will be grouped by acclimation temperature and terms will include mass, sex, acclimation order, population and all second order interactions.
+```{r echo=F}
+fits_ctmax = data_ctmax %>% group_by(temp) %>% do(model = stepAIC(aov(ctmax~ weight_wam + sex + accl_order + pop, data=.), scope = . ~ .^2, direction='both'))
+fits_ctmax$model
+fits_ctmax %>% tidy(model)
+```
+##Ctmax at 12°C
+Best Fit Model: ctmax ~ accl_order
+```{r, include=F}
+data_ctmax$pop <- factor(data_ctmax$pop, levels=c("NOC","OCE","SOC"))
+# Subset the data by acclimation temperature
+ctmax_cold <- subset(data_ctmax, data_ctmax$temp=="12")
+range(ctmax_cold$ctmax)
+
+# extract the AIC value from the model
+extractAIC(aov(formula = ctmax ~ accl_order + pop, data = ctmax_cold))
+
+# Save the model
+cold.model.ctmax <- aov(ctmax ~ accl_order + pop, data = ctmax_cold)
+summary(cold.model.ctmax)
+
+# Get p-values for pairwise comparision on population means
+# TE vs. NOC p = 0.99, TE vs. SOC p = 0.35, NOC vs. SOC p = 0.40
+TukeyHSD(cold.model.ctmax, which="pop")
+
+#investigate why acclimation order is significant: group 2 has higher CTmax and is larger. (also had lower 12°C MR than group 1)
+ctmax_by_accl <- ctmax_cold %>% group_by(accl_order) %>% do(ctmax_mean = mean(.$ctmax))
+ctmax_by_accl %>% tidy(ctmax_mean)
+
+# groups are similar in CTmax spread
+ctmax_cold_group1 <- subset(ctmax_cold, ctmax_cold$accl_order=="1")
+ctmax_cold_group2 <- subset(ctmax_cold, ctmax_cold$accl_order=="2")
+
+range(ctmax_cold_group1$ctmax) # 2.9
+range(ctmax_cold_group2$ctmax) # 3.2
+
+# plot of pop means with SE
+ctmax.cold.means <- tapply(ctmax_cold$ctmax, ctmax_cold$pop, mean)
+ctmax.cold.means
+ctmax.cold.se <- tapply(ctmax_cold$ctmax, ctmax_cold$pop, se)
+ctmax.cold.se
+ctmax.cold.cv <- tapply(ctmax_cold$ctmax, ctmax_cold$pop, cv)
+ctmax.cold.cv
+ctmax.cold <- data.frame("pop" = c("OCE","NOC","SOC") , "mean" = c(36.32846, 36.38444, 36.14825), "se" = c(0.1343342, 0.1363279, 0.1199791 ), "cv"=c(2.309256, 2.248125, 2.099174))
+ctmax.cold
+
+p3 <- ggplot(ctmax.cold, aes(x=as.factor(pop), y=mean)) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), width=.2,
+                position=position_dodge(.9)) + 
+  geom_point(aes(colour=pop), size=5) + ylim(36,36.75) + 
+  scale_colour_manual(name="Population", values=c("blue", "red", "purple")) + theme_bw() + ggtitle("12°C") + ylab("Critical Thermal Maximum") + xlab("Population") + theme(legend.position="none") + annotate("text", x=0.75, y = 36.72, label="p=0.3")
+p3 <- p3 + theme(plot.title=element_text(size=20, 
+                                         face="bold", 
+                                         hjust=0.5,
+                                         lineheight=1.2),  # title
+                 plot.caption=element_text(size=15),  # caption
+                 axis.title.x=element_text(size=15),  # X axis title
+                 axis.title.y=element_text(size=15),  # Y axis title
+                 axis.text.x=element_text(size=10,
+                                          vjust=.5),  # X axis text
+                 axis.text.y=element_text(size=10))  # Y axis text
+p3
+```
+##Ctmax at 28°C
+Best Fit Model: ctmax ~ mass + accl_order + mass:accl_order
+```{r}
+# subset the data
+ctmax_hot <- subset(data_ctmax, data_ctmax$temp=="28")
+range(ctmax_hot$ctmax)
+# extract AIC value
+extractAIC(aov(formula = ctmax ~ weight_wam + accl_order + weight_wam:accl_order + pop, 
+    data = ctmax_hot))
+
+# save the model
+hot.model.ctmax <- aov(ctmax ~ weight_wam + accl_order + weight_wam*accl_order + pop, data = ctmax_hot)
+summary(hot.model.ctmax)
+TukeyHSD(hot.model.ctmax, which="pop")
+# investigate the interaction between mass and acclimation order
+# group 1 has a significant (negative) correlation with mass but group 2 has no correlation. 
+mass_accl_order_inter <- ctmax_hot %>% group_by(accl_order) %>% do(mods =lm(ctmax~weight_wam, data=.))
+mass_accl_order_inter %>% tidy(mods)
+
+# plot of pop means with SE
+ctmax.hot.means <- tapply(ctmax_hot$ctmax, ctmax_hot$pop, mean)
+ctmax.hot.means
+ctmax.hot.se <- tapply(ctmax_hot$ctmax, ctmax_hot$pop, se)
+ctmax.hot.se
+ctmax.hot.cv <- tapply(ctmax_hot$ctmax, ctmax_hot$pop, cv)
+ctmax.hot.cv
+ctmax.hot <- data.frame("pop" = c("OCE","NOC","SOC") , "mean" = c(42.53844, 42.43771, 42.46000), "se" = c(0.04370472, 0.04710811, 0.04897722), "cv"=c(0.5811949, 0.6567162, 0.6211739))
+ctmax.hot
+
+p4 <- ggplot(ctmax.hot, aes(x=as.factor(pop), y=mean)) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), width=.2,
+                position=position_dodge(.9)) + 
+  geom_point(aes(colour=pop), size=5) + ylim(42,42.75) + 
+  scale_colour_manual(name="Population", values=c("blue", "red", "purple")) + theme_bw() + ggtitle("28°C") + ylab("Critical Thermal Maximum") + xlab("Population") + theme(legend.position="none") + annotate("text", x=0.75, y = 42.72, label="p = 0.25")
+p4 <- p4 + theme(plot.title=element_text(size=20, 
+                                         face="bold", 
+                                         hjust=0.5,
+                                         lineheight=1.2),  # title
+                 plot.caption=element_text(size=15),  # caption
+                 axis.title.x=element_text(size=15),  # X axis title
+                 axis.title.y=element_text(size=15),  # Y axis title
+                 axis.text.x=element_text(size=10,
+                                          vjust=.5),  # X axis text
+                 axis.text.y=element_text(size=10))  # Y axis text
+p4
+```
+##Plot the data for CTmax
+```{r echo=F}
+ctmax_fig <- grid.arrange(p3, p4, nrow=1)
+#ggsave("ctmax_fig.eps", ctmax_fig, width=12, height=6)
+```
+Use individuals measured at both 12°C and 28°C to investigate plasticity.
+
+Are 12°C and 28°C CTmax correlated? YES R2 = 0.9 p = 0.00038**
+
+What terms contibute to the difference between 28°C and 12°C CTmax (i.e. a measure of plasticity)? populations, but pairwise comparisons are not significant.
+```{r echo=F}
+# variable.x = 12°C, variable.y =28°C
+ctmax_all_wide <- merge(ctmax_cold, ctmax_hot, by="FishID", all = T)
+
+# variable.x = 12°C, variable.y = 28°C
+ctmax_diff <- ctmax_all_wide %>% group_by(FishID) %>%
+  mutate(diff_ctmax_btw_accl=ctmax.y-ctmax.x)
+
+# R2= 0.09, p = 0.00384 ** 
+summary(lm(ctmax_all_wide$ctmax.y~ctmax_all_wide$ctmax.x))
+
+ggplot(ctmax_all_wide, aes(x=ctmax.x, y=ctmax.y)) + geom_point() + geom_smooth(method=lm) + 
+  labs(x="12°C CTmax", y="28°C CTmax") + theme_bw()
+
+# is plasticity dependant on performance under one temperature?
+# Find a model that best describes variation in plasticity
+fits_ctmax_diff <- stepAIC(aov(diff_ctmax_btw_accl~ weight_wam.y + sex.y + pop.y, data=ctmax_diff), scope = . ~ .^2, direction='both')
+
+# there are no significant differences even though the best fit model contains pop
+# N vs TE p = 0.39
+# S vs TE p = 0.12
+# N vs S p = 0.76
+ctmax_diff_model <- aov(diff_ctmax_btw_accl~ pop.y, data=ctmax_diff)
+summary(ctmax_diff_model)
+TukeyHSD(ctmax_diff_model)
+```
+is plasticity dependant on performance under one temperature? YES depends on 12°C.
+```{r echo=F}
+# higher 12°C = lower plasticity
+ctmax_12_plasticity <- ggplot(ctmax_diff, aes(x=ctmax.x, y=diff_ctmax_btw_accl)) + geom_point() + 
+  geom_smooth(method=lm) + 
+  labs(x="12°C CTmax", y="Plasticity in CTmax") + 
+  annotate("text", x=34.25, y = 8.75, label="p < 0.001***, R2 = 0.90") + 
+  theme_bw()
+ctmax_12_plasticity
+
+# p < 2e-16 ***, R2= 0.9012
+summary(lm(ctmax_diff$diff_ctmax_btw_accl~ctmax_diff$ctmax.x))
+
+# horizontal lines, no relationship between 28°C and plasticity
+ctmax_28_plasticity <- ggplot(ctmax_diff, aes(x=ctmax.y, y=diff_ctmax_btw_accl)) + geom_point() + 
+  geom_smooth(method=lm) + 
+  labs(x="28°C CTmax", y="Plasticity in CTmax") + 
+  annotate("text", x=42, y = 8.75, label="p = 0.93, R2 < 0.0001") + 
+  theme_bw()
+ctmax_28_plasticity
+
+# p =  0.9293, R2 = 9.194e-05
+summary(lm(ctmax_diff$diff_ctmax_btw_accl~ctmax_diff$ctmax.y))
+```
+```{r}
+ggsave("ctmax_12_plasticity.eps", ctmax_12_plasticity)
+ggsave("ctmax_28_plasticity.eps", ctmax_28_plasticity)
+```
+##Variance in CTmax. CV is a percentage (%). 
+All Ctmax 8.06% - levene's test p = 0.89, asymptotic test for the equality of cov p = 0.94
+28C Ctmax 0.62% - levene's test p = 0.89, asymptotic test for the equality of cov p = 0.83
+12C Ctmax 2.22% - levene's test p = 0.98, asymptotic test for the equality of cov p = 0.79
+
+28	NOC	0.5811949		
+28	OCE	0.6567162		
+28	SOC	0.6211739		
+12	NOC	2.3092556		
+12	OCE	2.2481247		
+12	SOC	2.0991735	
+```{r include=F}
+# overall
+cv(data_ctmax$ctmax)
+
+# by temp (use within group mean)
+ctmax_cvs <- data_ctmax %>% group_by(temp) %>% do(cvs = cv(.$ctmax))
+ctmax_cvs %>% tidy(cvs)
+
+# Between acclimation temperatures 1.685413e-27
+asymptotic_test(data_ctmax$ctmax, data_ctmax$temp)
+
+# by population and temp (use within group mean)
+ctmax_cvs1 <- data_ctmax %>% group_by(temp, pop) %>% do(cvs = cv(.$ctmax))
+ctmax_cvs1 %>% tidy(cvs)
+
+# p = 0.83
+asymptotic_test(ctmax_cold$ctmax, ctmax_cold$pop)
+# p = 0.79
+asymptotic_test(ctmax_hot$ctmax, ctmax_hot$pop)
+
+# equality of variance between acclimation groups
+# p= 0.36
+asymptotic_test(ctmax_cold$ctmax, ctmax_cold$accl_order)
+# p = 0.15
+asymptotic_test(ctmax_hot$ctmax, ctmax_hot$accl_order)
+```
+Scale the variance so the mean of all data is 1. 
+```{r echo=F}
+ctmax_variance <- ctmax_all_wide %>% group_by(FishID) %>%
+  mutate(ctmax_scaled_12=ctmax.x/(mean(ctmax_cold$ctmax))) %>%
+  mutate(ctmax_scaled_28=ctmax.y/(mean(ctmax_hot$ctmax)))
+
+mean(ctmax_variance$ctmax_scaled_12)
+mean(ctmax_variance$ctmax_scaled_28)
+
+wam_ctmax_variance <- merge(ctmax_variance, wam_variance, all=T)
+```
+Add scaled CTmax data to the elipse and density plots with WAM.
+```{r}
+variance_elipse_plot.1 <- ggplot(wam_ctmax_variance) +
+  geom_point(aes(y=MR_scaled_28, x=MR_scaled_12, color="Metabolic Rate")) + 
+  stat_ellipse(aes(x=MR_scaled_12, y=MR_scaled_28),type = "norm", color = "darkgrey") + 
+  geom_point(aes(y=ctmax_scaled_28, x=ctmax_scaled_12, color="CTmax")) + 
+  stat_ellipse(aes(y=ctmax_scaled_28, x=ctmax_scaled_12,type = "norm")) +
+  xlim(0.5,1.6) + ylim(0.5,1.6) + 
+labs(x="Variance 12°C", y="Variance 28°C", title="Phenotypic Variance") + 
+  scale_color_manual(name="Phenotype", values=c("black","darkgrey")) +
+  theme_bw()
+variance_elipse_plot.1
+ggsave("var_elipse.pdf", variance_elipse_plot.1, width=10, height =7)
+variance_density_plot.1 <- ggplot(wam_ctmax_variance) + 
+  geom_density(aes(x = MR_scaled_12, colour = "MR_scaled_12")) + 
+  geom_density(aes(x = MR_scaled_28, colour = "MR_sclaled_28")) +
+  geom_density(aes(x = ctmax_scaled_12, colour = "ctmax_scaled_12")) + 
+  geom_density(aes(x = ctmax_scaled_28, colour = "ctmax_sclaled_28"))
+
+variance_density_plot.1 
+```
+```{r}
+ggsave("var_elipse.eps", variance_elipse_plot.1, width=12, height=10)
+```
+#Cardiac Metabolism Results
+Look for normality in the data.
+```{r}
+s.tests.cam <- data_cam %>% group_by(temp, substrate) %>% do(s.models = shapiro.test(.$MR_pmol_s)) 
+s.tests.cam %>% tidy(s.models)
+data_cam %>% group_by(temp, substrate) %>% do(qplots = qqnorm(.$MR_pmol_s))
+```
+Data aren't normally distributed for glucose at 12°C or 28°, fatty acids at 12°C, or LKA at 12°C. Try log transformation..
+```{r}
+s.tests.cam <- data_cam %>% group_by(temp, substrate) %>% do(s.models = shapiro.test(log10(.$MR_pmol_s)))
+s.tests.cam %>% tidy(s.models)
+data_cam %>% group_by(temp, substrate) %>% do(qplots = qqnorm(log10(.$MR_pmol_s)))
+```
+Log transforming does not improve data normality. A few outliers are present but there is no reason to remove them. Populations were evenly split among days etc. so groups should be equally impacted by technical error. 
+```{r}
+ggplot(data_cam, aes(x=cam_date, y=MR_pmol_s, col=substrate, shape=pop)) + geom_point() + 
+  facet_wrap(~temp) + labs(title="including all individuals") + theme_bw() 
+```
+##Body Mass Correlation 
+To make a plot comparing substrates within temperatures we need to take the body mass residuals.
+```{r}
+# Save body mass residuals by temperature NOT by substrate so we can compare all substrates!
+cam_model1 <- summary(lm(data_cam$MR_pmol_s~data_cam$cam_mass))
+data_cam$MR_res_by_temp <- cam_model1$residuals
+
+# Save body mass residuals by temperature and substrate so we can compare within a substrate..
+cam_model2 <- summary(lm(data_cam$MR_pmol_s~data_cam$substrate + data_cam$cam_mass))
+data_cam$MR_res_by_temp_by_sub <- cam_model2$residuals
+```
+
+```{r}
+cam_hot <- subset(data_cam, data_cam$temp == "28")
+cam_cold <- subset(data_cam, data_cam$temp == "12")
+
+glucose <- subset(data_cam, data_cam$substrate == "Glucose")
+fa <- subset(data_cam, data_cam$substrate == "FA")
+lka <- subset(data_cam, data_cam$substrate == "LKA")
+inh <- subset(data_cam, data_cam$substrate == "INH")
+
+### hot
+glucose_h <- subset(glucose, glucose$temp == "28")
+fa_h <- subset(fa, fa$temp == "28")
+lka_h <- subset(lka, lka$temp == "28")
+inh_h <- subset(inh, inh$temp == "28")
+
+### cold
+glucose_c <- subset(glucose, glucose$temp == "12")
+fa_c <- subset(fa, fa$temp == "12")
+lka_c <- subset(lka, lka$temp == "12")
+inh_c <- subset(inh, inh$temp == "12")
+
+# sample size by temp substrate
+cam_counts <- data_cam %>% group_by(temp, substrate) %>% do(n = nrow(.))
+cam_counts %>% tidy(n)
+
+# sample size by temp and pop and substrate
+cam_counts1 <- data_cam %>% group_by(temp, pop, substrate) %>% do(n = nrow(.))
+cam_counts1 %>% tidy(n)
+```
+## Temperature Specific CAM Model
+#Population Specific Patterns in CAM
+Use AIC to get best fit model across all data
+```{r}
+fits_cam = data_cam %>% do(model = stepAIC(aov(MR_pmol_s ~ temp + cam_mass + heart_mass + substrate + sex + pop, data=.), scope = . ~ .^2, direction = 'both'))
+fits_cam$model
+fits_cam %>% tidy(model)
+```
+```{r}
+fits_cam = data_cam %>% do(model = stepAIC(aov(MR_pmol_s ~ temp + heart_mass + substrate + sex + pop, data=.), scope = . ~ .^2, direction = 'both'))
+fits_cam$model
+fits_cam %>% tidy(model)
+
+cam_model <- aov(data=data_cam, MR_pmol_s ~ temp + heart_mass + substrate + sex + pop + temp:heart_mass + temp:substrate + heart_mass:sex + heart_mass:substrate + heart_mass:pop + temp:sex)
+
+TukeyHSD(cam_model, which="temp")
+TukeyHSD(cam_model, which="sex")
+TukeyHSD(cam_model, which="substrate")
+TukeyHSD(cam_model, which="temp:substrate")
+TukeyHSD(cam_model, which="pop")
+```
+```{r}
+cam_model <- aov(data=data_cam, MR_pmol_s ~ temp + cam_mass + heart_mass + substrate + sex + pop + temp:substrate + temp:cam_mass + pop)
+TukeyHSD(cam_model, which="temp")
+TukeyHSD(cam_model, which="sex")
+TukeyHSD(cam_model, which="substrate")
+TukeyHSD(cam_model, which="temp:substrate")
+TukeyHSD(cam_model, which="pop")
+```
+Use AIC to get best fit models by substrate and temperature. 
+```{r}
+fits_cam1 = data_cam %>% group_by(temp) %>% do(model = stepAIC(aov(MR_pmol_s ~ cam_mass + heart_mass + substrate + sex + pop, data=.), scope = . ~ .^2, direction = 'both'))
+fits_cam1$model
+fits_cam1 %>% tidy(model)
+```
+Models by temperature only. Looking for patterns specific to 12°C or 28°C among substrates. 
+```{r}
+# 28°C
+cam_hot_model <- aov(formula = MR_pmol_s ~ cam_mass + heart_mass + substrate + sex + heart_mass:substrate + cam_mass:substrate, data = cam_hot)
+summary(cam_hot_model)
+# G > FA = LKA > END
+TukeyHSD(cam_hot_model, which="substrate")
+# M:NOC-F:NOC  7.1086760   0.5604815 13.656870 0.0247470
+# F:SOC-F:NOC  6.5300492   0.3297987 12.730300 0.0325426
+# both interactions involve NOC females..
+TukeyHSD(cam_hot_model, which="sex:pop")
+
+cam_means_1 <- data_cam %>% group_by(temp, substrate, sex) %>% do(means_cams=mean(.$MR_pmol_s))
+cam_means_1 %>% tidy(means_cams)
+
+# 12°C
+cam_cold_model <- aov(MR_pmol_s ~ heart_mass + substrate + sex + cam_mass:substrate, data=cam_cold)
+summary(cam_cold_model)
+# G > FA > LKA
+# FA > END = LKA
+TukeyHSD(cam_cold_model, which="substrate")
+```
+Remove the potentially bad day of cam and see if the results for FA at 12°C changes.
+```{r}
+TukeyHSD(aov(fa_c$MR_pmol_s~as.factor(fa_c$cam_date)))
+
+data_cam2 <- subset(data_cam, data_cam$cam_date !="2019-06-25")
+
+fits_cam2 = data_cam2 %>% group_by(substrate, temp) %>% do(model = stepAIC(aov(MR_pmol_s ~ cam_mass + sex + pop, data=.), scope = . ~ .^2, direction = 'both'))
+fits_cam2$model
+fits_cam2 %>% tidy(model)
+```
+##Glucose CAM
+```{r}
+# cam_mass p = 2.64e-05***, sex:pop p = 0.04*
+glu.hot.model <- summary(aov(formula = MR_pmol_s ~ cam_mass + sex + pop + sex:pop, data = glucose_h))
+glu.hot.model 
+TukeyHSD(aov(formula = MR_pmol_s ~cam_mass + sex + pop +  sex:pop, data = glucose_h), which="sex:pop")
+
+extractAIC(aov(formula = MR_pmol_s ~ cam_mass + sex + pop + sex:pop, data = glucose_h))
+
+# interaction term
+cam_pop_mass_inter <- data_cam %>% group_by(temp, pop, substrate) %>% do(models_cam=summary(lm(.$MR_pmol_s~.$cam_mass)))
+cam_pop_mass_inter %>% tidy(models_cam)
+
+cam_pop_mass_sex_inter <- glucose_h %>% group_by(pop) %>% do(models_cam=summary(lm(.$MR_pmol_s~.$sex)))
+cam_pop_mass_sex_inter %>% tidy(models_cam)
+
+ggplot(glucose_h, aes(x=sex, y=MR_pmol_s, col=pop)) + geom_point() + geom_smooth(method="lm")
+
+# cam_mass p = 0.005***
+glu.cold.model <- summary(aov(formula = MR_pmol_s ~ cam_mass + pop + cam_mass:pop, data = glucose_c))
+glu.cold.model
+
+extractAIC(aov(formula = MR_pmol_s ~ cam_mass + pop + cam_mass:pop, data = glucose_c))
+```
+##Fatty Acids CAM
+```{r}
+# cam_mass p = 7.24e-08 ***, sex p =  0.00959 ** 
+fa.hot.model <- summary(aov(formula = MR_pmol_s ~ cam_mass + sex + pop, data = fa_h))
+fa.hot.model
+
+extractAIC(aov(formula = MR_pmol_s ~ cam_mass + sex + pop, data = fa_h))
+
+# cam_mass p = 9.4e-05 ***
+fa.cold.model <- summary(aov(formula = MR_pmol_s ~ cam_mass + sex + pop, data = fa_c))
+fa.cold.model 
+
+extractAIC(aov(formula = MR_pmol_s ~ cam_mass + sex + pop, data = fa_c))
+```
+##Lactate, Ketones, Ethanol CAM
+```{r}
+# cam_mass p = 83.87e-07 ***
+lka.hot.model <- summary(aov(formula = MR_pmol_s ~ cam_mass + pop, data = lka_h))
+lka.hot.model
+
+extractAIC(aov(formula = MR_pmol_s ~ cam_mass + pop, data = lka_h))
+
+# cam_mass p = 1.13e-05 ***, sex p = 0.298325, OCE vs NOC p = 0.224315, OCE vs SOC p = 0.873649, NOC vs SOC p = 0.242841 
+lka.cold.model <- summary(aov(formula = MR_pmol_s ~ cam_mass + sex + pop, data = lka_c))
+lka.cold.model
+
+extractAIC(aov(formula = MR_pmol_s ~ cam_mass + sex + pop, data = lka_c))
+```
+##Endogenous CAM
+```{r}
+# cam_mass p = 9.17e-06***, OCE vs NOC p = 0.02*, OCE vs SOC p = 0.75, NOC vs SOC p = 0.04*
+end.hot.model <- summary(aov(formula = MR_pmol_s ~ cam_mass + pop, data = inh_h))
+end.hot.model
+TukeyHSD(aov(formula = MR_pmol_s ~ cam_mass + pop, data = inh_h), which="pop")
+extractAIC(aov(formula = MR_pmol_s ~ cam_mass + pop, data = inh_h))
+
+# cam_mass p = 0.000269 ***, OCE vs NOC p = 0.88, OCE vs SOC p = 0.35, NOC vs SOC p = 0.28
+end.cold.model <- summary(aov(formula = MR_pmol_s ~ cam_mass + pop, data = inh_c))
+end.cold.model
+
+extractAIC(aov(formula = MR_pmol_s ~ cam_mass + pop, data = inh_c))
+```
+##Variance in CAM
+All CAM 48.58%
+Overall by Substrate
+FA	49.76066			
+Glucose	34.67240			
+INH	49.38628			
+LKA	31.68211	
+
+Substrate and Temp
+FA	28	29.89162		
+FA	12	61.86939		
+Glucose	28	29.50619		
+Glucose	12	39.08244		
+INH	28	47.20965		
+INH	12	42.26123		
+LKA	28	34.96428		
+LKA	12	28.96632	
+
+Substrate and Temp and Pop
+FA	28	OCE	30.39952	
+FA	28	NOC	37.38606	
+FA	28	SOC	21.60551	
+FA	12	OCE	62.97837	
+FA	12	NOC	63.79365	
+FA	12	SOC	58.66781	
+Glucose	28	OCE	21.23269	
+Glucose	28	NOC	40.87580	
+Glucose	28	SOC	27.34451	
+Glucose	12	OCE	36.02728	
+Glucose	12	NOC	35.61509	
+Glucose	12	SOC	38.33120	
+INH	28	OCE	35.68022	
+INH	28	NOC	57.43844	
+INH	28	SOC	46.59615	
+INH	12	OCE	43.51440	
+INH	12	NOC	43.30473	
+INH	12	SOC	39.39268	
+LKA	28	OCE	31.22852	
+LKA	28	NOC	45.04453	
+LKA	28	SOC	31.39235	
+LKA	12	OCE	31.84854	
+LKA	12	NOC	26.41773	
+LKA	12	SOC	23.28317	
+
+```{r include=F}
+# (sd / mean * 100) = CV
+# fa > inh > glucose > lka
+# overall 
+cv(data_cam$MR_pmol_s)
+data_cam_cold <- subset(data_cam, data_cam$temp=="12")
+data_cam_hot <- subset(data_cam, data_cam$temp=="28")
+
+# by temp
+cam_cvs1 <- data_cam %>% group_by(temp) %>% do(cvs = cv(.$MR_pmol_s))
+cam_cvs1 %>% tidy(cvs)
+
+# by substrate 
+cam_cvs1 <- data_cam %>% group_by(substrate) %>% do(cvs = cv(.$MR_pmol_s))
+cam_cvs1 %>% tidy(cvs)
+
+# by substrate and temperature
+cam_cvs2 <- data_cam %>% group_by(substrate, temp) %>% do(cvs = cv(.$MR_pmol_s))
+cam_cvs2 %>% tidy(cvs)
+
+# by population and temperature
+cam_cvs3 <- data_cam %>% group_by(substrate, temp, pop) %>% do(cvs = cv(.$MR_pmol_s))
+cam_cvs3 %>% tidy(cvs)
+
+cam_var3 <- data_cam %>% group_by(substrate, temp) %>% do(var = asymptotic_test(.$MR_pmol_s, .$pop))
+cam_var3
+cam_var3$var
+
+# only significant one p = 0.042*
+asymptotic_test(glucose_h$MR_pmol_s, glucose_h$pop)
+
+#Equal COV among populations.
+# p = 0.17
+asymptotic_test(data_cam$MR_pmol_s, data_cam$pop)
+# p = 0.012
+asymptotic_test(cam_hot$MR_pmol_s, cam_hot$pop)
+# p = 0.97
+asymptotic_test(cam_cold$MR_pmol_s, cam_cold$pop)
+
+#Equal COV among substrates
+# p = 1.463786e-05
+asymptotic_test(data_cam$MR_pmol_s, data_cam$substrate)
+# p = 0.00536101
+asymptotic_test(cam_hot$MR_pmol_s, cam_hot$substrate)
+# p = 2.28547e-05
+asymptotic_test(cam_cold$MR_pmol_s, cam_cold$substrate)
+
+# between accl temps p = 0.88
+asymptotic_test(data_cam$MR_pmol_s, data_cam$temp)
+
+# between temps within a substrate
+asymptotic_test(glucose$MR_pmol_s, glucose$temp)
+# p = 5.06186e-05
+asymptotic_test(fa$MR_pmol_s, fa$temp)
+asymptotic_test(lka$MR_pmol_s, lka$temp)
+asymptotic_test(inh$MR_pmol_s, inh$temp)
+```
+Scale CAM to be centered on 1.
+```{r echo=F}
+cam_hot <- subset(data_cam, data_cam$temp=="28")
+cam_cold <- subset(data_cam, data_cam$temp=="12")
+
+cam_variance1 <- cam_cold %>% 
+  mutate(cam_scaled_by_temp=cam_cold$MR_pmol_s/(mean(data_cam$MR_pmol_s))) 
+
+cam_variance2 <- cam_hot %>%
+  mutate(cam_scaled_by_temp=cam_hot$MR_pmol_s/(mean(data_cam$MR_pmol_s)))
+
+mean(cam_variance1$cam_scaled_by_temp)
+mean(cam_variance2$cam_scaled_by_temp)
+```
+Add CAM to the variance plots
+```{r}
+cam_variance <- rbind(cam_variance1, cam_variance2)
+cam_wam_ctmax_variance <- merge(cam_variance, wam_ctmax_variance, all=T)
+
+variance_density_plot.2 <- ggplot(cam_wam_ctmax_variance) + 
+  geom_density(aes(x = MR_scaled_12, colour = "Metabolic Rate 12°C")) + 
+  geom_density(aes(x = MR_scaled_28, colour = "Metabolic Rate 28°C")) +
+  geom_density(aes(x = ctmax_scaled_12, colour = "CTmax 12°C")) + 
+  geom_density(aes(x = ctmax_scaled_28, colour = "CTmax 28°C")) + 
+  geom_density(aes(x = cam_scaled_by_temp, colour = "Cardiac Metabolic Rate")) 
+
+variance_density_plot.2 
+```
+
+```{r echo=F}
+# 12C CAM Variance by Substrate
+cam_variance_g12 <- glucose_c %>% 
+  mutate(cam_scaled_glu_12=glucose_c$MR_pmol_s/(mean(data_cam$MR_pmol_s))) 
+
+cam_variance_fa12 <- fa_c %>% 
+  mutate(cam_scaled_fa_12=fa_c$MR_pmol_s/(mean(data_cam$MR_pmol_s))) 
+
+cam_variance_lka12 <- lka_c %>% 
+  mutate(cam_scaled_lka_12=lka_c$MR_pmol_s/(mean(data_cam$MR_pmol_s))) 
+
+cam_variance_end12 <- inh_c %>% 
+  mutate(cam_scaled_end_12=inh_c$MR_pmol_s/(mean(data_cam$MR_pmol_s))) 
+
+cam_variance_12.0 <- merge(cam_variance_g12, cam_variance_fa12, by="FishID")
+cam_variance_12.1 <- merge(cam_variance_lka12, cam_variance_end12, by="FishID")
+cam_sub_variance_12 <- merge(cam_variance_12.0, cam_variance_12.1, by="FishID")
+
+# 28C CAM Variance by Substrate
+cam_variance_g28 <- glucose_h %>% 
+  mutate(cam_scaled_glu_28=glucose_h$MR_pmol_s/(mean(data_cam$MR_pmol_s))) 
+
+cam_variance_fa28 <- fa_h %>% 
+  mutate(cam_scaled_fa_28=fa_h$MR_pmol_s/(mean(data_cam$MR_pmol_s))) 
+
+cam_variance_lka28 <- lka_h %>% 
+  mutate(cam_scaled_lka_28=lka_h$MR_pmol_s/(mean(data_cam$MR_pmol_s))) 
+
+cam_variance_end28 <- inh_h %>% 
+  mutate(cam_scaled_end_28=inh_h$MR_pmol_s/(mean(data_cam$MR_pmol_s))) 
+
+cam_variance_28.0 <- merge(cam_variance_g28, cam_variance_fa28, by="FishID")
+cam_variance_28.1 <- merge(cam_variance_lka28, cam_variance_end28, by="FishID")
+cam_sub_variance_28 <- merge(cam_variance_28.0, cam_variance_28.1, by="FishID")
+```
+
+```{r}
+# 12°C Density Plot CAM
+variance_density_plot.3 <- ggplot(cam_sub_variance_12) + 
+  geom_density(aes(x = cam_scaled_glu_12, colour = "Glucose")) +
+  geom_density(aes(x = cam_scaled_fa_12, colour = "Fatty Acids")) + 
+  geom_density(aes(x = cam_scaled_lka_12, colour = "Lactate, Ketones, Alcohol")) + 
+  geom_density(aes(x = cam_scaled_end_12, colour = "Endogenous")) +
+  labs(x="12°C Cardiac Metabolic Rate", y="Density") +
+  annotate("text", x=2.5, y=1.5, label="G > FA = LKA") + 
+  annotate("text", x=2.5, y=1.4, label="FA > END = LKA") +
+  annotate("text", x=2.5, y=1.6, label="p < 0.001***") +
+  scale_color_manual(values=c("#00BFC4", "#F8766D", "#7CAE00", "#C77CFF")) + 
+  xlim(0,3) + ylim(0,1.6) +
+  theme_bw()
+
+variance_density_plot.3 
+
+# 28°C Density Plot CAM
+variance_density_plot.4 <- ggplot(cam_sub_variance_28) + 
+  geom_density(aes(x = cam_scaled_glu_28, col = "Glucose")) +
+  geom_density(aes(x = cam_scaled_fa_28, col = "Fatty Acids")) + 
+  geom_density(aes(x = cam_scaled_lka_28, col = "Lactate, Ketones, Alcohol")) + 
+  geom_density(aes(x = cam_scaled_end_28, col = "Endogenous")) +
+  labs(x="28°C Cardiac Metabolic Rate", y="") +
+  annotate("text", x=2.4, y=1.5, label="G > FA = LKA > END") + 
+  annotate("text", x=2.5, y=1.6, label="p < 0.001***") +
+  scale_color_manual(values=c("#00BFC4", "#F8766D", "#7CAE00", "#C77CFF")) + 
+  xlim(0,3) + ylim(0,1.6) +
+  theme_bw()
+
+variance_density_plot.4 
+
+cam_variance <- grid.arrange(variance_density_plot.3, variance_density_plot.4, nrow=1)
+#ggsave("cam_density.eps", cam_variance, width = 12, height=4)
+```
+##Plot CAM
+Plots showing variance due to substrate and not mass or temperature.
+```{r}
+cam_bars_cold <- ggplot(cam_cold, aes(fill=substrate, y=MR_res_by_temp , 
+                     x=reorder(FishID, MR_pmol_s, sum))) + 
+  geom_bar(stat="identity", position="dodge", width=1) + facet_wrap(~temp) + geom_hline(yintercept=0) + 
+  facet_grid(rows= vars(temp)) + ylim(-25,75) + 
+  labs(x="Individual Ranked by Total Cardiac Metabolic Rate (left to right)", y="Cardiac Metabolic Rate Body Mass Residuals (pmol/s)") +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+                                                            panel.background = element_blank(), axis.line = element_line(colour = "black")) + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+cam_bars_cold
+
+cam_bars_hot <- ggplot(cam_hot, aes(fill=substrate, y=MR_res_by_temp , 
+                     x=reorder(FishID, MR_pmol_s, sum))) + 
+  geom_bar(stat="identity", position="dodge", width=1) + facet_wrap(~temp) + geom_hline(yintercept=0) + 
+  facet_grid(rows= vars(temp)) + ylim(-25,75) + 
+  labs(x="Individual Ranked by Total Cardiac Metabolic Rate (left to right)", y="Cardiac Metabolic Rate Body Mass Residuals (pmol/s)") +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+                                                            panel.background = element_blank(), axis.line = element_line(colour = "black")) + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+cam_bars_hot
+
+cam_bars <- grid.arrange(cam_bars_cold, cam_bars_hot, nrow=2)
+#ggsave("car_bars1.eps", cam_bars, width=15, height=8)
+```
+```{r}
+# calculate % usage per individual of each substrate
+library(dplyr)
+data_cam_sum <- data_cam %>% group_by(FishID, temp) %>%
+  mutate(total_MR_pmol_sec=sum(MR_pmol_s))
+
+data_cam_sum <- data_cam_sum %>% group_by(FishID, temp, substrate) %>%
+  mutate(perc_usage = MR_pmol_s/total_MR_pmol_sec)
+
+data_cam_sum_test <- data_cam_sum %>% group_by(FishID) %>%
+  mutate(perc_usage_rank = rank(-perc_usage))
+
+data_cam_sum_ones <- subset(data_cam_sum_test, data_cam_sum_test$perc_usage_rank=="1")
+data_cam_sum_ones
+
+cam_usage <- data_cam_sum_ones %>% group_by(substrate, temp) %>% do(rank_sum = sum(.$perc_usage_rank))
+cam_usage
+cam_usage$rank_sum
+```
+
+```{r}
+cam_boxes_data <- summarySE(data_cam, measurevar="MR_pmol_s", groupvars=c("temp","substrate"))
+
+cam_boxes2 <- ggplot(cam_boxes_data, aes(fill=substrate, y=MR_pmol_s, 
+                     x=substrate)) + facet_wrap(~temp) + 
+  facet_grid(rows= vars(temp)) + 
+   geom_errorbar(aes(ymin=MR_pmol_s-se, ymax=MR_pmol_s+se), width=.1) + 
+  geom_point() + theme_bw() +
+  annotate("text", x=0.75, y=60, label="p < 0.001***") +
+  annotate("text", x=2, y=42, label="b") +
+  annotate("text", x=1, y=55, label="a") +
+  annotate("text", x=4, y=35, label="c") +
+  annotate("text", x=3, y=35, label="bc")
+cam_boxes2
+#ggsave("cam_boxes2.eps", cam_boxes2, width=10, height=8)
+```
+```{r}
+data_cam_mass <- lm(data_cam$MR_pmol_s~data_cam$cam_mass)
+data_cam$MR_res <- data_cam_mass$residuals
+cam_boxes_data <- summarySE(data_cam, measurevar="MR_res", groupvars=c("temp","substrate"))
+
+data_heart <- subset(data_cam, data_cam$heart_mass != "NA")
+
+data_heart_mass <- lm(data_heart$MR_pmol_s~data_heart$heart_mass)
+data_heart$MR_res_heart <- data_heart_mass$residuals
+cam_boxes_data2 <- summarySE(data_heart, measurevar="MR_res_heart", groupvars=c("temp","substrate"))
+
+cam_boxes_data$substrate <- factor(cam_boxes_data$substrate, levels=c("Glucose","FA","LKA","INH"))
+cam_boxes_data$temp <- factor(cam_boxes_data$temp, levels=c("12","28"))
+pd <- position_dodge(0.2) # move them .05 to the left and right
+
+cam_boxes3 <- ggplot(cam_boxes_data, aes(y=MR_res, 
+                     x=substrate:temp, col=temp))  + 
+   geom_point(position=pd, size=2.5) +
+   geom_errorbar(aes(ymin=MR_res-se, ymax=MR_res+se), width=.2) +
+     theme_bw() + scale_color_manual(values=c("blue", "orange")) +
+  annotate("text", x=1, y=16, label="a") +
+      annotate("text", x=2, y=22, label="a") +
+  annotate("text", x=3, y=8, label="b") +
+  annotate("text", x=4, y=4, label="b") +
+  annotate("text", x=5, y=0, label="bc") +
+  annotate("text", x=6, y=0, label="bc") +
+    annotate("text", x=7, y=-2, label="c") +
+      annotate("text", x=8, y=-12, label="d")
+cam_boxes3
+
+cam_boxes_data2$substrate <- factor(cam_boxes_data2$substrate, levels=c("Glucose","FA","LKA","INH"))
+cam_boxes_data2$temp <- factor(cam_boxes_data2$temp, levels=c("12","28"))
+pd <- position_dodge(0.2) # move them .05 to the left and right
+
+cam_boxes3.1 <- ggplot(cam_boxes_data2, aes(y=MR_res_heart, 
+                     x=substrate:temp, col=temp))  + 
+   geom_point(position=pd, size=2.5) +
+   geom_errorbar(aes(ymin=MR_res_heart-se, ymax=MR_res_heart+se), width=.2) +
+     theme_bw() + scale_color_manual(values=c("blue", "orange")) +
+  annotate("text", x=1, y=16, label="a") +
+      annotate("text", x=2, y=22, label="a") +
+  annotate("text", x=3, y=8, label="b") +
+  annotate("text", x=4, y=4, label="bc") +
+  annotate("text", x=5, y=0, label="bc") +
+  annotate("text", x=6, y=0, label="bc") +
+    annotate("text", x=7, y=-2, label="c") +
+      annotate("text", x=8, y=-12, label="d")
+cam_boxes3.1
+
+#ggsave("cam_box_new.eps", cam_boxes3, height=6, width=8)
+```
+
+```{r}
+cam_boxes_data3 <- summarySE(data_cam, measurevar="MR_res", groupvars=c("temp","substrate","pop"))
+
+cam_boxes_data3$substrate <- factor(cam_boxes_data3$substrate, levels=c("Glucose","FA","LKA","INH"))
+
+cam_boxes_data3$pop <- factor(cam_boxes_data3$pop, levels=c("NOC","OCE","SOC"))
+
+cam_boxes_data3$temp <- factor(cam_boxes_data3$temp, levels=c("12","28"))
+
+cam_boxes4 <- ggplot(cam_boxes_data2, aes(y=MR_res, 
+                     x=substrate:temp:pop, col=pop))  + 
+   geom_point(position=pd, size=2.5) +
+   geom_errorbar(aes(ymin=MR_res-se, ymax=MR_res+se), width=.2) +
+     theme_bw() + scale_color_manual(values=c("blue", "red","purple")) +
+  theme(axis.text.x = element_text(angle = 90))
+cam_boxes4
+
+#ggsave("cam_box_new_pop.eps", cam_boxes4, height=6, width=8)
+```
+```{r}
+ggplot(data_cam, aes(y=heart_mass, 
+                     x=cam_mass)) +
+  geom_point() + geom_smooth(method="lm") + facet_wrap(~temp) + theme_bw()
+
+# all data  R2 = 0.236 p < 2.2e-16
+summary(lm(data=data_cam, cam_mass~heart_mass))
+summary(lm(data=data_cam, log10(cam_mass)~log10(heart_mass)))
+
+# 28C p < 2.2e-16***, R2= 0.62
+summary(lm(data=cam_hot, heart_mass~cam_mass))
+
+# 12C p = 4.061e-11***, R2= 0.19
+summary(lm(data=cam_cold, heart_mass~cam_mass))
+```
+Finally, look at correlations among phenotypes.
+```{r}
+# All data
+all_data_wide <- merge(data_ctmax, data_wam, by="FishID")
+all_data_wide <- merge(all_data_wide, data_cam, by="FishID")
+
+head(all_data_wide)
+
+all_data_hot <- subset(all_data_wide, all_data_wide$temp.x=="28")
+all_data_cold <- subset(all_data_wide,all_data_wide$temp.x=="12")
+
+# WAM vs. CTmax 28°C p = 0.0138* R2=0.0134
+summary(lm(all_data_hot$residuals_log_mass~all_data_hot$ctmax))
+
+ggplot(data=all_data_hot, aes(x=ctmax, y=residuals_log_mass)) +
+  geom_point() + geom_smooth(method="lm") + theme_bw()
+
+# WAM vs. CTmax 12°C p = 0.165 R2=0.0039
+summary(lm(all_data_cold$residuals_log_mass~all_data_cold$ctmax))
+
+ggplot(data=all_data_cold, aes(x=ctmax, y=residuals_log_mass)) +
+  geom_point() + geom_smooth(method="lm") + theme_bw()
+
+# WAM vs. CaM 12 p = 0.4398 R2=0.0058
+# WAM vs. CaM 28 p = 0.0001151 R2 = 0.1004
+fits_cam_wam = all_data_wide %>% group_by(substrate, temp) %>% 
+  do(model = summary(lm(residuals_log_mass ~ MR_res, data=.)))
+fits_cam_wam
+fits_cam_wam$model
+
+ggplot(data=all_data_cold, aes(x=residuals_log_mass, y=MR_res, col=substrate)) +
+  geom_point() + geom_smooth(method="lm") + theme_bw() + facet_wrap(~temp)
+```
+
+```{r}
+library(tidyr)
+data_cam1$MR_pmol_s[is.na(data_cam1$MR_pmol_s)] <- 0
+data_cam_model <- lm(data_cam1$MR_pmol_s~data_cam1$cam_mass)
+data_cam1$MR_res <- data_cam_model$residuals
+
+data_cam_sub <- data_cam1[c(5,7,8,9,10,14,17)]
+wide_cam <- data_cam_sub %>%
+  spread(substrate, MR_res)
+wide_cam2<-na.omit(wide_cam)
+head(wide_cam2, 24)
+
+all_data_wide <- merge(data_ctmax, data_wam, by="FishID")
+all_data_wide <- merge(all_data_wide, wide_cam2, by="FishID")
+head(all_data_wide)
+
+all_data_hot <- subset(all_data_wide, all_data_wide$temp.x=="28")
+all_data_cold <- subset(all_data_wide,all_data_wide$temp.x=="12")
+```
+```{r}
+library(corrplot)
+
+cor.mtest <- function(mat, ...) {
+    mat <- as.matrix(mat)
+    n <- ncol(mat)
+    p.mat<- matrix(NA, n, n)
+    diag(p.mat) <- 0
+    for (i in 1:(n - 1)) {
+        for (j in (i + 1):n) {
+            tmp <- cor.test(mat[, i], mat[, j], ...)
+            p.mat[i, j] <- p.mat[j, i] <- tmp$p.value
+        }
+    }
+  colnames(p.mat) <- rownames(p.mat) <- colnames(mat)
+  p.mat
+}
+# matrix of the p-value of the correlation
+p.mat <- cor.mtest(wide_all_corr1)
+head(p.mat[, 1:6])
+
+p.mat2 <- cor.mtest(wide_all_corr2)
+head(p.mat2[, 1:6])
+
+wide_all_corr1 <- cor(all_data_hot[,c(13,37,42:45)])
+M1 <- corrplot(wide_all_corr1, addCoef.col = "black", p.mat = p.mat, sig.level = 0.01, insig = "blank", type="upper", order="hclust")
+corrplot.mixed(wide_all_corr1)
+
+wide_all_corr2 <- cor(all_data_cold[,c(13,37,42:45)])
+M <- corrplot(wide_all_corr2, addCoef.col = "black", p.mat = p.mat2, sig.level = 0.01, insig = "blank", type="upper", order="hclust")
+colnames(M) <- c("CTmax", "Metabolic Rate", "Fatty Acids", "Glucose", "Endogenous", "LKA")
+rownames(M) <- c("CTmax", "Metabolic Rate", "Fatty Acids", "Glucose", "Endogenous", "LKA")
+corrplot(M)
+corrplot.mixed(wide_all_corr2)
+```
+Use a PCA to detect linear relationships among variables.
+```{r}
+data_cam_sub <- data_cam1[c(5,7,8,9,10,14,15,16)]
+wide_cam <- data_cam_sub %>%
+  spread(substrate, MR_pmol_s)
+wide_cam2<-na.omit(wide_cam)
+head(wide_cam2, 24)
+
+# log transform 
+log.cam <- log(wide_cam2[, 7:10])
+cam.pop <- wide_cam2[, 2]
+cam.id <- wide_cam2[,1]
+cam.temp <- wide_cam2[,5]
+cam.sex <- wide_cam2[,3]
+# apply PCA - scale. = TRUE is highly 
+# advisable, but default is FALSE. 
+cam.pca <- prcomp(log.cam,
+                 center = TRUE,
+                 scale. = TRUE) 
+summary(cam.pca)
+predict(cam.pca, 
+        newdata=tail(log.cam, 2))
+
+library(devtools)
+library(factoextra)
+plot(cam.pca, type = "b")
+
+bip <- fviz_pca_biplot(cam.pca, label="var", habillage = cam.pop, 
+             addEllipses=TRUE, ellipse.level=0.95)
+bip
+p <- fviz_pca_biplot(cam.pca, label="var", habillage = cam.temp, 
+             addEllipses=TRUE, ellipse.level=0.95)
+p
+
+p1 <- fviz_pca_ind(cam.pca, label="var", habillage = cam.sex, 
+             addEllipses=TRUE, ellipse.level=0.95)
+p1
+
+p2 <- fviz_pca_ind(cam.pca, label="var", habillage = cam.pop, 
+             addEllipses=TRUE, ellipse.level=0.95)
+p2
+```
+
+```{r}
+wide_cam_cold <- subset(wide_cam2, wide_cam2$temp=="12")
+
+nonlog.cam.cold <- wide_cam_cold[, 7:10]
+cam.pop1 <- wide_cam_cold[, 2]
+cam.id1 <- wide_cam_cold[,1]
+cam.temp1 <- wide_cam_cold[,5]
+cam.sex1 <- wide_cam_cold[,3]
+# apply PCA - scale. = TRUE is highly 
+# advisable, but default is FALSE. 
+cam.pca.cold2 <- prcomp(nonlog.cam.cold,
+                 center = TRUE,
+                 scale. = TRUE) 
+summary(cam.pca.cold2)
+predict(cam.pca.cold2, 
+       newdata=tail(nonlog.cam.cold, 2))
+
+fviz_eig(cam.pca.cold2, addlabels=TRUE)
+
+bip1 <- fviz_pca_biplot(cam.pca.cold2, label="var", habillage = cam.pop1, title="PCA-Biplot 12°C Non-Log")
+bip1
+```
+
+```{r}
+wide_cam_hot <- subset(wide_cam2, wide_cam2$temp=="28")
+
+# Without log transformation
+nonlog.cam.hot <- wide_cam_hot[, 7:10]
+cam.pop2 <- wide_cam_hot[, 2]
+cam.id2 <- wide_cam_hot[,1]
+cam.temp2 <- wide_cam_hot[,5]
+cam.sex2 <- wide_cam_hot[,3]
+# apply PCA - scale. = TRUE is highly 
+# advisable, but default is FALSE. 
+cam.pca.hot2 <- prcomp(nonlog.cam.hot,
+                 center = TRUE,
+                 scale. = TRUE) 
+summary(cam.pca.hot2)
+predict(cam.pca.hot2, 
+        newdata=tail(nonlog.cam.hot, 2))
+
+fviz_eig(cam.pca.hot2, addlabels=TRUE)
+
+bip2.2 <- fviz_pca_biplot(cam.pca.hot2, label="var", habillage = cam.pop2, title="PCA - Biplot 28°C Non-Log")
+bip2.2
+```
+
+```{r}
+fviz_pca_biplot(cam.pca.cold2, label="var", habillage = cam.pop1, 
+                col.var="black", title="PCA-Biplot 12°C Non-Log",
+                axes=c(1,2), palette =c("blue","red","purple"))
+fviz_eig(cam.pca.cold2, addlabels=TRUE)
+fviz_contrib(cam.pca.cold2, choice = "var", axes = 1)
+fviz_contrib(cam.pca.cold2, choice = "var", axes = 2)
+
+fviz_pca_biplot(cam.pca.hot2, label="var", habillage = cam.pop2, 
+                col.var="black", title="PCA - Biplot 28°C Non-Log", 
+                axes=c(1,2), palette =c("blue","red","purple"))
+fviz_eig(cam.pca.hot2, addlabels=TRUE)
+fviz_contrib(cam.pca.hot2, choice = "var", axes = 1)
+fviz_contrib(cam.pca.hot2, choice = "var", axes = 2)
+
+fviz_pca_biplot(cam.pca.cold2, label="var", title="PCA-Biplot 12°C Non-Log", col.var="black")
+
+fviz_pca_biplot(cam.pca.hot2, label="var", title="PCA - Biplot 28°C Non-Log", col.var="black")
+```
+Confirm linear relationships amoung substrates
+```{r}
+fits_cam_subs = wide_cam2 %>% group_by(temp) %>% 
+  do(model1 = summary(lm(Glucose ~ FA, data=.)), 
+     model2 = summary(lm(Glucose ~ LKA, data=.)),
+     model3 = summary(lm(Glucose ~ INH, data=.)),
+     model4 = summary(lm(FA ~ LKA, data=.)),
+     model5 = summary(lm(FA ~ INH, data=.)),
+     model6 = summary(lm(LKA ~ INH, data=.)))
+fits_cam_subs
+fits_cam_subs$model1
+fits_cam_subs$model2
+fits_cam_subs$model3
+fits_cam_subs$model4
+fits_cam_subs$model5
+fits_cam_subs$model6
+```
+```{r}
+wide_cam_cold_subs <- cor(wide_cam_cold[,7:10])
+corrplot(wide_cam_cold_subs, col = gray.colors(100))
+corrplot(wide_cam_cold_subs, type="upper")
+corrplot.mixed(wide_cam_cold_subs)
+
+wide_cam_hot_subs <- cor(wide_cam_hot[,7:10])
+corrplot(wide_cam_hot_subs, col = gray.colors(100))
+corrplot(wide_cam_hot_subs, type="upper")
+corrplot.mixed(wide_cam_hot_subs)
+```
+Heatmap of substrate use by individual
+```{r}
+library("circlize")
+library("RColorBrewer")
+library(cluster)
+library(dendextend)
+library(gplots)
+
+wide_cam_cold1 <- subset(wide_cam, wide_cam$temp=="12")
+wide_cam_hot1 <- subset(wide_cam, wide_cam$temp=="28")
+
+col <- colorRampPalette(brewer.pal(10, "YlOrRd"))(256)
+col2 <- colorRampPalette(brewer.pal(6, "YlOrRd"))(256)
+
+rnames <- wide_cam_cold1[,0]                            # assign labels in column 1 to "rnames"
+mat_data <- data.matrix(wide_cam_cold1[,16:19])  # transform column 2-5 into a matrix
+rownames(mat_data) <- rnames                  # assign row names
+
+Rowv  <- wide_cam_cold1$Glucose%>% scale %>% dist %>% hclust %>% as.dendrogram %>%
+   set("branches_k_color", k = 3) %>% set("branches_lwd", 0) %>%
+   ladderize
+
+Colv  <- mat_data %>% scale %>% t %>% dist %>% hclust %>% as.dendrogram %>%
+   set("branches_k_color", k = 4) %>%
+   set("branches_lwd", 1.2) %>%
+   ladderize
+
+# plot heatmap
+heatmap.2(mat_data, scale = "none", xlab="Substrate", main="12°C Cardiac Metabolism",
+        col=col, density.info="none", trace="none", srtCol=0,
+          Colv=FALSE, Rowv=TRUE, dendrogram='none', na.color="black")
+
+# scale data and plot heatmap
+df <- scale(mat_data)
+
+heatmap.2(df, scale = "none", xlab="Substrate", main="12°C Cardiac Metabolism",
+        col=col2, density.info="none", trace="none", srtCol=0,
+          Colv=FALSE, Rowv=TRUE, dendrogram='none', na.color="black")
+################################################################
+#### 28°C
+rnames1 <- wide_cam_hot1[,0]                            # assign labels in column 1 to "rnames"
+mat_data1 <- data.matrix(wide_cam_hot1[,7:10])  # transform column 2-5 into a matrix
+rownames(mat_data1) <- rnames1                 # assign row names
+
+Rowv2  <- wide_cam_hot1$Glucose %>% scale %>% dist %>% hclust %>% as.dendrogram %>%
+   set("branches_k_color", k = 3) %>% set("branches_lwd", 0) %>%
+   ladderize
+
+Colv2  <- mat_data1 %>% scale %>% t %>% dist %>% hclust %>% as.dendrogram %>%
+   set("branches_k_color", k = 4) %>%
+   set("branches_lwd", 1.2) %>%
+   ladderize
+
+# plot heatmap
+heatmap.2(mat_data1, scale ="none", xlab="Substrate", main="28°C Cardiac Metabolism",
+          col=col, density.info="none", trace="none", srtCol=0,
+          Colv=FALSE, Rowv=TRUE, na.color="lightgrey")
+# scale data and plot heatmap
+df1 <- scale(mat_data1)
+
+heatmap.2(df1, scale ="none", xlab="Substrate", main="28°C Cardiac Metabolism",
+          col=col2, density.info="none", trace="none", srtCol=0,
+          Colv=FALSE, Rowv=TRUE, dendrogram='none', na.color="lightgrey")
+```
+```{r}
+heat_all <- ggplot(data_cam1, aes(x=substrate, y=FishID, fill=MR_pmol_s)) + 
+  geom_tile() +
+  scale_fill_distiller(palette = "YlOrRd", trans="reverse", na.value="lightgrey") +
+  labs(x="Substrate", y="Individual") +
+  theme_bw() + facet_wrap(~temp, scales="free") +
+  scale_x_discrete(expand = c(0, 0)) +
+  scale_y_discrete(expand = c(0, 0)) +
+  theme(axis.text.y = element_blank())
+heat_all
+ggsave("heatmaps.eps", heat_all, width=8, height=12)
+```
+```{r}
+data_cam1$substrate <- factor(data_cam1$substrate, levels=c("Glucose", "FA", "LKA", "INH"))
+data_cam1.2 <- ddply(data_cam1, .(substrate), transform, rescale=scales::rescale(MR_pmol_s))
+
+heat_all1 <- ggplot(data_cam1.2, aes(x=substrate, y=FishID, fill=rescale)) + 
+  geom_tile() +
+  scale_fill_gradient(low="green", high="red", na.value="lightgrey") +
+  labs(x="Substrate", y="Individual") +
+  theme_bw() + facet_wrap(~temp, scales="free") +
+  scale_x_discrete(expand = c(0, 0)) +
+  scale_y_discrete(expand = c(0, 0)) +
+  theme(axis.text.y = element_blank())
+heat_all1
+ggsave("heatmaps_scaled.eps", heat_all1, width=8, height=12)
+```
+```{r}
+data_cam1$substrate <- factor(data_cam1$substrate, levels=c("Glucose", "FA", "LKA", "INH"))
+data_cam1 = data_cam1[order(data_cam1$pop, data_cam1$FishID), ]
+data_cam1$FishID = factor(data_cam1$FishID, levels =unique(data_cam1$FishID))
+
+heat_all3 <- ggplot(data_cam1, aes(x=substrate, y=FishID, fill=scales::rescale(MR_pmol_s))) + 
+  geom_tile() +
+  scale_fill_distiller(palette = "YlOrRd", trans="reverse", na.value="lightgrey") +
+  labs(x="Substrate", y="Individual") +
+  geom_tile(fill="pop") +
+  theme_bw() + facet_wrap(~temp, scales="free") +
+  scale_x_discrete(expand = c(0, 0)) +
+  scale_y_discrete(expand = c(0, 0)) +
+  theme(axis.text.y = element_blank())
+heat_all3
+ggsave("heatmaps3.eps", heat_all3, width=8, height=12)
+```
+
+```{r}
+library(ComplexHeatmap)
+
+# data matrix
+data_cam1$substrate <- factor(data_cam1$substrate, levels=c("Glucose", "FA", "LKA", "INH"))
+data_cam_mat <- ddply(data_cam1, .(substrate), transform, rescale=scales::rescale(MR_pmol_s))
+
+wide_cam <- data_cam_mat %>%
+  spread(substrate, rescale)
+
+mat_cam_cold1 <- subset(wide_cam, wide_cam$temp=="12")
+mat_cam_hot1 <- subset(wide_cam, wide_cam$temp=="28")
+
+rnames <- mat_cam_cold1[,0]                            # assign labels in column 1 to "rnames"
+mat_data <- data.matrix(mat_cam_cold1[,16:19])  # transform column 16-19 into a matrix
+rownames(mat_data) <- rnames                  # assign row names
+
+Rowv  <- wide_cam_cold1$Glucose%>% scale %>% dist %>% hclust %>% as.dendrogram %>%
+   set("branches_k_color", k = 3) %>% set("branches_lwd", 0) %>%
+   ladderize
+
+Colv  <- mat_data %>% scale %>% t %>% dist %>% hclust %>% as.dendrogram %>%
+   set("branches_k_color", k = 4) %>%
+   set("branches_lwd", 1.2) %>%
+   ladderize
+
+
+col_fun = colorRamp2(c(-2, 0, 2), c("green", "white", "red"))
+col_fun(seq(-4, 4))
+
+Heatmap(df, col=col_fun)
+```
