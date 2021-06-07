@@ -12,3 +12,7 @@ Includes code for analysis and visualization of temperature data from summer 201
 2. physio_plasticity.R
 
 Includes code for all other analyses presented in the manuscript and production of all main text and supplemental figures. Annotations split the code into sections by trait and sections specific to each figure with the associated stats are also noted. 
+
+Data associated with the code can be found at:
+
+Manuscript in progress.
