@@ -1,5 +1,5 @@
 # physiological_plasticity_funhe
-Code for manuscript entitled: Physiological Plasticity among Populations Subjected to Recent Anthropogenic Heating.
+Code for manuscript entitled: Interindividual Plasticity in Metabolic and Thermal Tolerance traits from Populations Subjected to Recent Anthropogenic Heating
 Authors: Melissa K. Drown, Amanda N. DeLiberto, Moritz A. Ehrlich, Douglas L. Crawford and Marjorie F. Oleksiak
 University of Miami, Rosenstiel School of Marine and Atmospheric Science, Miami, FL
 
